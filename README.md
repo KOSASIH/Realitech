@@ -1,5 +1,3 @@
-
-
 ## System Requirements
 
 Before running Realitech, ensure that your system meets the following minimum requirements:
