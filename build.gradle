@@ -1,0 +1,356 @@
+plugins {
+    id "java"
+    id "maven-publish"
+    id "idea"
+    id "eclipse"
+    id "jacoco"
+    id "org.springframework.boot"
+    id "com.google.cloud.tools.jib"
+    id "com.gorylenko.gradle-git-properties"
+    id "org.openapi.generator"
+    id "com.github.node-gradle.node"
+    id "org.sonarqube"
+    id "com.diffplug.spotless"
+    id "io.spring.nohttp"
+    id "com.github.andygoossens.gradle-modernizer-plugin"
+    id "io.gatling.gradle"
+    id "org.liquibase.gradle"
+    // jhipster-needle-gradle-plugins - JHipster will add additional gradle plugins here
+}
+
+group = "com.kosasih.realitech"
+version = "0.0.1-SNAPSHOT"
+
+description = ""
+
+sourceCompatibility=17
+targetCompatibility=17
+assert System.properties["java.specification.version"] == "17" || "18" || "19"
+
+ext {
+    springProfiles = ""
+    if (project.hasProperty("tls")) {
+        springProfiles += ",tls"
+    }
+    if (project.hasProperty("e2e")) {
+        springProfiles += ",e2e"
+    }
+}
+
+apply from: "gradle/docker.gradle"
+apply from: "gradle/sonar.gradle"
+
+spotless {
+    java {
+        target 'src/*/java/**/*.java'
+        removeUnusedImports()
+    }
+}
+
+apply from: "gradle/swagger.gradle"
+apply from: "gradle/kafka.gradle"
+apply from: "gradle/cache.gradle"
+apply from: "gradle/liquibase.gradle"
+// jhipster-needle-gradle-apply-from - JHipster will add additional gradle scripts to be applied here
+
+if (project.hasProperty("prod") || project.hasProperty("gae")) {
+    apply from: "gradle/profile_prod.gradle"
+} else {
+    apply from: "gradle/profile_dev.gradle"
+}
+
+if (project.hasProperty("war")) {
+    apply from: "gradle/war.gradle"
+}
+
+if (project.hasProperty("gae")) {
+    apply plugin: 'maven'
+    apply plugin: 'org.springframework.boot.experimental.thin-launcher'
+    apply plugin: 'io.spring.dependency-management'
+
+    dependencyManagement {
+        imports {
+            mavenBom "tech.jhipster:jhipster-dependencies:${jhipsterDependenciesVersion}"
+        }
+    }
+    appengineStage.dependsOn thinResolve
+}
+
+if (project.hasProperty("zipkin")) {
+    apply from: "gradle/zipkin.gradle"
+}
+
+idea {
+    module {
+        excludeDirs += files("node_modules")
+    }
+}
+
+eclipse {
+    sourceSets {
+        main {
+            java {
+                srcDirs += ["build/generated/sources/annotationProcessor/java/main"]
+            }
+        }
+    }
+}
+
+defaultTasks "bootRun"
+
+springBoot {
+    mainClass = "com.kosasih.realitech.RealitechApp"
+}
+
+test {
+    useJUnitPlatform()
+    exclude "**/*IT*", "**/*IntTest*"
+    testLogging {
+        events 'FAILED', 'SKIPPED'
+    }
+    jvmArgs += '-Djava.security.egd=file:/dev/./urandom -Xmx512m'
+    // uncomment if the tests reports are not generated
+    // see https://github.com/jhipster/generator-jhipster/pull/2771 and https://github.com/jhipster/generator-jhipster/pull/4484
+    // ignoreFailures true
+    reports.html.required = false
+}
+
+sourceSets {
+    gatling {
+        java.srcDirs = ["src/test/java/gatling/simulations"]
+        resources.srcDirs = ["src/test/gatling/conf"]
+    }
+}
+
+gatling {
+    simulations = { include "**/*Test*.java" }
+}
+
+modernizer {
+    failOnViolations = true
+    includeTestClasses = true
+}
+
+
+
+task consoleLauncherTest(type: JavaExec) {
+    dependsOn(testClasses)
+    String cucumberReportsDir = file("$buildDir/reports/tests")
+    outputs.dir(reportsDir)
+    classpath = sourceSets["test"].runtimeClasspath
+    main = "org.junit.platform.console.ConsoleLauncher"
+    args("--scan-classpath")
+    args("--include-engine", "cucumber")
+    args("--reports-dir", cucumberReportsDir)
+}
+
+task cucumberTest(type: Test) {
+    dependsOn(consoleLauncherTest)
+    description = "Execute cucumber BDD tests."
+    group = "verification"
+    include "**/*CucumberIT*"
+
+    // uncomment if the tests reports are not generated
+    // see https://github.com/jhipster/generator-jhipster/pull/2771 and https://github.com/jhipster/generator-jhipster/pull/4484
+    // ignoreFailures true
+    reports.html.required = false
+}
+
+check.dependsOn cucumberTest
+
+check.dependsOn integrationTest
+task testReport(type: TestReport) {
+    destinationDirectory = file("$buildDir/reports/tests")
+    testResults.from(test)
+}
+
+task integrationTestReport(type: TestReport) {
+    destinationDirectory = file("$buildDir/reports/tests")
+    testResults.from(integrationTest)
+}
+
+task cucumberTestReport(type: TestReport) {
+    destinationDirectory = file("$buildDir/reports/tests")
+    testResults.from(cucumberTest)
+}
+
+gitProperties {
+    failOnNoGitDirectory = false
+    keys = ["git.branch", "git.commit.id.abbrev", "git.commit.id.describe"]
+}
+
+tasks.withType(com.gorylenko.GenerateGitPropertiesTask).configureEach {
+  outputs.doNotCacheIf("Task is always executed") { true }
+}
+
+checkstyle {
+    toolVersion "${checkstyleVersion}"
+    configFile file("checkstyle.xml")
+    checkstyleTest.enabled = false
+}
+nohttp {
+    source.include "build.gradle", "README.md"
+}
+
+configurations {
+    providedRuntime
+    implementation.exclude module: "spring-boot-starter-tomcat"
+}
+
+repositories {
+    // Local maven repository is required for libraries built locally with maven like development jhipster-bom.
+    // mavenLocal()
+    mavenCentral()
+    maven { url 'https://artifactory-oss.prod.netflix.net/artifactory/maven-oss-candidates' }
+    // jhipster-needle-gradle-repositories - JHipster will add additional repositories
+}
+
+dependencies {
+    // import JHipster dependencies BOM
+    if (!project.hasProperty("gae")) {
+        implementation platform("tech.jhipster:jhipster-dependencies:${jhipsterDependenciesVersion}")
+    }
+
+    // Use ", version: jhipsterDependenciesVersion, changing: true" if you want
+    // to use a SNAPSHOT release instead of a stable release
+    implementation "tech.jhipster:jhipster-framework"
+    implementation "jakarta.annotation:jakarta.annotation-api"
+    implementation "com.fasterxml.jackson.module:jackson-module-jaxb-annotations"
+    implementation "com.fasterxml.jackson.datatype:jackson-datatype-hibernate6"
+    implementation "com.fasterxml.jackson.datatype:jackson-datatype-hppc"
+    implementation "com.fasterxml.jackson.datatype:jackson-datatype-jsr310"
+    testImplementation "org.testcontainers:junit-jupiter"
+    testImplementation "org.testcontainers:testcontainers"
+    implementation "org.springdoc:springdoc-openapi-starter-webmvc-api"
+    implementation "com.zaxxer:HikariCP"
+    implementation "org.apache.commons:commons-lang3"
+    implementation "org.openapitools:jackson-databind-nullable:${jacksonDatabindNullableVersion}"
+    // Openapi generator uses javax namespace for now https://github.com/OpenAPITools/openapi-generator/pull/13593
+    implementation "javax.annotation:javax.annotation-api:1.3.2"
+    implementation "javax.validation:validation-api:2.0.1.Final"
+    implementation "com.github.ben-manes.caffeine:caffeine"
+    annotationProcessor "org.hibernate.orm:hibernate-jpamodelgen:${hibernateVersion}"
+    implementation "org.hibernate.orm:hibernate-core"
+    implementation "org.hibernate.validator:hibernate-validator"
+    implementation "org.mapstruct:mapstruct:${mapstructVersion}"
+    annotationProcessor "org.mapstruct:mapstruct-processor:${mapstructVersion}"
+    annotationProcessor "org.springframework.boot:spring-boot-configuration-processor:${springBootVersion}"
+    implementation "org.springframework.boot:spring-boot-loader-tools"
+    implementation "org.springframework.boot:spring-boot-starter-actuator"
+    implementation "org.springframework.boot:spring-boot-starter-data-jpa"
+    testImplementation "org.testcontainers:jdbc"
+    testImplementation "org.apache.commons:commons-collections4"
+    testImplementation "org.awaitility:awaitility:${awaitilityVersion}"
+    testImplementation "org.testcontainers:elasticsearch"
+    implementation "org.springframework.boot:spring-boot-starter-data-elasticsearch"
+    implementation "org.springframework.boot:spring-boot-starter-logging"
+    implementation "org.springframework.boot:spring-boot-starter-mail"
+    implementation "org.springframework.boot:spring-boot-starter-thymeleaf"
+    implementation "org.springframework.boot:spring-boot-starter-web"
+    testImplementation "org.springframework.boot:spring-boot-starter-test"
+    testImplementation "org.springframework.boot:spring-boot-test"
+    testImplementation "org.springframework.security:spring-security-test"
+    testImplementation("com.tngtech.archunit:archunit-junit5-api:${archunitJunit5Version}") {
+        exclude group: "org.slf4j", module: "slf4j-api"
+    }
+    testRuntimeOnly("com.tngtech.archunit:archunit-junit5-engine:${archunitJunit5Version}") {
+        exclude group: "org.slf4j", module: "slf4j-api"
+    }
+    implementation "org.springframework.boot:spring-boot-starter-undertow"
+    implementation "org.springframework.boot:spring-boot-starter-oauth2-client"
+    implementation "org.springframework.boot:spring-boot-starter-oauth2-resource-server"
+    implementation "org.springframework.cloud:spring-cloud-starter"
+    implementation "org.springframework.cloud:spring-cloud-starter-circuitbreaker-resilience4j"
+    implementation "org.springframework.retry:spring-retry"
+    implementation "org.springframework.cloud:spring-cloud-starter-openfeign"
+    implementation "org.springframework.cloud:spring-cloud-starter-bootstrap"
+    implementation "org.springframework.cloud:spring-cloud-starter-netflix-eureka-client"
+    implementation "org.springframework.cloud:spring-cloud-starter-config"
+    implementation "org.springframework.security:spring-security-data"
+    implementation "io.micrometer:micrometer-registry-prometheus"
+    implementation "io.dropwizard.metrics:metrics-core"
+    testImplementation "io.cucumber:cucumber-junit-platform-engine"
+    testImplementation "io.cucumber:cucumber-java"
+    testImplementation "io.cucumber:cucumber-spring"
+    testImplementation "org.junit.platform:junit-platform-console"
+    testImplementation "org.testng:testng"
+    testImplementation "io.gatling.highcharts:gatling-charts-highcharts:${gatlingVersion}"
+    // jhipster-needle-gradle-dependency - JHipster will add additional dependencies here
+}
+
+if (project.hasProperty("gae")) {
+    task createPom {
+        def basePath = 'build/resources/main/META-INF/maven'
+        doLast {
+            pom {
+                withXml(dependencyManagement.pomConfigurer)
+            }.writeTo("${basePath}/${project.group}/${project.name}/pom.xml")
+        }
+    }
+    bootJar.dependsOn = [createPom]
+}
+
+task cleanResources(type: Delete) {
+    delete "build/resources"
+}
+
+wrapper {
+    gradleVersion = "8.2.1"
+}
+
+task webapp_test(type: NpmTask) {
+    inputs.property('appVersion', project.version)
+    inputs.files("package-lock.json")
+        .withPropertyName('package-lock')
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.files("build.gradle")
+        .withPropertyName('build.gradle')
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.files("angular.json")
+        .withPropertyName('angular.json')
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.files("tsconfig.json", "tsconfig.app.json")
+        .withPropertyName("tsconfig")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.dir("webpack/")
+        .withPropertyName("webpack/")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.dir("src/main/webapp/")
+        .withPropertyName("webapp-source-dir")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+
+    outputs.dir("build/test-results/jest/")
+        .withPropertyName("jest-result-dir")
+    outputs.file("build/test-results/TESTS-results-jest.xml")
+        .withPropertyName("jest-result")
+        outputs.file("build/test-results/clover.xml")
+        .withPropertyName("clover-result")
+
+    dependsOn npmInstall,compileTestJava
+    args = ["run", "webapp:test"]
+}
+
+if (project.hasProperty("nodeInstall")) {
+    node {
+        version = "18.16.1"
+        npmVersion = "9.8.0"
+        download = true
+    }
+
+    // Copy local node and npm to a fixed location for npmw
+    def fixedNode = tasks.register("fixedNode", Copy) {
+        from nodeSetup
+        into 'build/node'
+    }
+    tasks.named("nodeSetup").configure { finalizedBy fixedNode }
+
+    def fixedNpm = tasks.register("fixedNpm", Copy) {
+        from npmSetup
+        into 'build/node'
+    }
+    tasks.named("npmSetup").configure { finalizedBy fixedNpm }
+}
+
+test.dependsOn webapp_test
+compileJava.dependsOn processResources
+processResources.dependsOn bootBuildInfo
